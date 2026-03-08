@@ -1,6 +1,5 @@
 import os
 import io
-import base64
 import csv
 from datetime import datetime
 from pydantic import BaseModel, Field
@@ -51,7 +50,8 @@ def get_drive_service():
         return None
 
 def process_inbody_pdfs():
-    """Google Driveの指定フォルダから「スキャン_*.pdf」を探してGeminiに送信し、処理後に別フォルダに移動する"""
+    """Google Driveの指定フォルダからPDFを探してGeminiに送信し、処理後にリネームして別フォルダに移動する。
+    すでに InBody_ から始まるファイルは処理対象外とする。"""
 
     # 環境変数の読み込み
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -75,8 +75,8 @@ def process_inbody_pdfs():
 
     init_csv()
 
-    # 入力フォルダ内の "スキャン_*.pdf" ファイルを検索
-    query = f"'{input_folder_id}' in parents and name contains 'スキャン_' and mimeType='application/pdf' and trashed=false"
+    # 入力フォルダ内の PDF ファイルを検索（ただし、すでに "InBody_" で始まるものは除外）
+    query = f"'{input_folder_id}' in parents and mimeType='application/pdf' and trashed=false and not name contains 'InBody_'"
     try:
         results = drive_service.files().list(q=query, fields="files(id, name, parents)").execute()
         files = results.get("files", [])
@@ -85,7 +85,7 @@ def process_inbody_pdfs():
         return
 
     if not files:
-        print(f"No matching PDF files found in Drive folder: {input_folder_id}")
+        print(f"No unprocessed PDF files found in Drive folder: {input_folder_id}")
         return
 
     for file_info in files:
@@ -106,12 +106,10 @@ def process_inbody_pdfs():
             print(f"Failed to download file {file_name}: {e}")
             continue
 
-        # Base64でエンコード
-        encoded_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
-
+        # google-generativeai SDKは内部でエンコードするため、そのままbytesを渡す
         pdf_part = {
             "mime_type": "application/pdf",
-            "data": encoded_pdf
+            "data": pdf_bytes
         }
 
         # Gemini API の呼び出し
