@@ -48,6 +48,11 @@ coverage.xml
 *.cover
 *.py.cover
 .hypothesis/
+
+# Google OAuth credentials and tokens (SECURITY: Never commit these!)
+credentials.json
+token.json
+.env.local
 .pytest_cache/
 cover/
 

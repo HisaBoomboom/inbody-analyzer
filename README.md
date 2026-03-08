@@ -21,56 +21,82 @@ uv venv --python 3.12
 source .venv/bin/activate
 
 # 必要なパッケージを追加 (Gemini, Google Drive API, Pydantic)
-uv pip install pydantic google-generativeai google-api-python-client google-auth
+uv pip install google-genai google-api-python-client google-auth-oauthlib python-dotenv pydantic
 
 # 開発用パッケージ (Linter/Formatterなど) を追加する場合
 uv pip install ruff pytest
 ```
 
-### 環境変数の設定
+### 認証セットアップ
 
-**方法1: `.env.local` ファイルを使用（推奨）**
+本プロジェクトでは、以下の2つの認証方式をサポートしています：
 
-1. プロジェクトルートに `.env.local` ファイルを作成します：
+| 環境 | 方式 | 対象 |
+|------|------|------|
+| **ローカル開発** | OAuth 2.0 | 個人での開発・テスト |
+| **デプロイ環境** | サービスアカウント | GCP Cloud Run など |
+
+**詳細なセットアップ方法は [AUTH_SETUP.md](./AUTH_SETUP.md) を参照してください。**
+
+#### クイックスタート（ローカル開発）
+
 ```bash
-cp .env.example .env.local
-```
+# 1. credentials.json を Google Cloud Console からダウンロード
+#    → プロジェクトルートに配置
 
-2. `.env.local` を編集して、実際の値を設定してください：
-```bash
-GEMINI_API_KEY="your_api_key_here"
-GOOGLE_APPLICATION_CREDENTIALS="path/to/your/service-account.json"
-DRIVE_INPUT_FOLDER_ID="your_input_folder_id"
-DRIVE_PROCESSED_FOLDER_ID="your_processed_folder_id"
-```
+# 2. .env.local を作成
+cat > .env.local << 'EOF'
+GEMINI_API_KEY="your-api-key-here"
+DRIVE_INPUT_FOLDER_ID="your-folder-id"
+DRIVE_PROCESSED_FOLDER_ID="your-folder-id"
+EOF
 
-3. `python-dotenv` をインストールします：
-```bash
-uv pip install python-dotenv
-```
-
-4. `main.py` の先頭に以下を追加して、`.env.local` を自動読み込みします：
-```python
-from dotenv import load_dotenv
-load_dotenv('.env.local')
-```
-
-**.env.local は `.gitignore` に含まれているため、Git にはコミットされません。機密情報は安全に管理されます。**
-
-**方法2: 環境変数を直接設定する場合**
-```bash
-export GEMINI_API_KEY="your_api_key_here"
-export GOOGLE_APPLICATION_CREDENTIALS="path/to/your/service-account.json"
-export DRIVE_INPUT_FOLDER_ID="your_input_folder_id"
-export DRIVE_PROCESSED_FOLDER_ID="your_processed_folder_id"
-```
-
-実行
-```bash
+# icon実行
 python main.py
+# → ブラウザが開いて認証画面が表示されます
 ```
 
-## 2. GCPアーキテクチャ案 (Google Driveベース)
+## 3. テストの実行
+
+PyTest を使用してテストを実行できます。
+
+### テスト環境のセットアップ
+
+```bash
+# テスト用パッケージをインストール
+uv pip install pytest pytest-cov pytest-mock
+```
+
+### テストの実行方法
+
+```bash
+# すべてのテストを実行
+pytest
+
+# 特定のテストのみ実行
+pytest tests/test_main.py -v
+
+# スキーマのテストのみ実行
+pytest tests/test_main.py::TestInBodyMeasurementSchema -v
+
+# カバレッジレポートを生成
+pytest --cov --cov-report=html
+```
+
+### テスト内容
+
+テストスイート（[tests/test_main.py](./tests/test_main.py)）では以下を検証：
+
+- ✅ **Pydantic スキーマ**: 入力データのバリデーション
+- ✅ **CSV 処理**: ファイルの作成と書き込み
+- ✅ **Google Sheets 統合**: データの追記（モック）
+- ✅ **PDF 処理**: テスト PDF の存在確認
+- ✅ **環境変数**: 必須・オプショナル設定の確認
+
+テスト用 PDF：
+- `InBody_20260221_1838.pdf` - サンプルの InBody 測定結果（テスト用）
+
+## 4. GCPアーキテクチャ案 (Google Driveベース)
 
 本格的な運用として、GCPにデプロイする場合のアーキテクチャ案は以下の通りです。
 スマートフォンアプリのGoogle Drive機能を使って紙の結果をスキャン・保存すると、GCP側で定期的に回収・分析します。
