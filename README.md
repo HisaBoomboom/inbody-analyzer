@@ -28,16 +28,39 @@ uv pip install ruff pytest
 ```
 
 ### 環境変数の設定
-実行の際は、以下の環境変数を設定してください。
 
+**方法1: `.env.local` ファイルを使用（推奨）**
+
+1. プロジェクトルートに `.env.local` ファイルを作成します：
 ```bash
-# Gemini APIのキー
+cp .env.example .env.local
+```
+
+2. `.env.local` を編集して、実際の値を設定してください：
+```bash
+GEMINI_API_KEY="your_api_key_here"
+GOOGLE_APPLICATION_CREDENTIALS="path/to/your/service-account.json"
+DRIVE_INPUT_FOLDER_ID="your_input_folder_id"
+DRIVE_PROCESSED_FOLDER_ID="your_processed_folder_id"
+```
+
+3. `python-dotenv` をインストールします：
+```bash
+uv pip install python-dotenv
+```
+
+4. `main.py` の先頭に以下を追加して、`.env.local` を自動読み込みします：
+```python
+from dotenv import load_dotenv
+load_dotenv('.env.local')
+```
+
+**.env.local は `.gitignore` に含まれているため、Git にはコミットされません。機密情報は安全に管理されます。**
+
+**方法2: 環境変数を直接設定する場合**
+```bash
 export GEMINI_API_KEY="your_api_key_here"
-
-# Google Drive APIを利用するためのサービスアカウント認証情報へのパス
 export GOOGLE_APPLICATION_CREDENTIALS="path/to/your/service-account.json"
-
-# InBodyのPDFが保存されるGoogle Driveの入力フォルダIDと、処理後に移動するフォルダID
 export DRIVE_INPUT_FOLDER_ID="your_input_folder_id"
 export DRIVE_PROCESSED_FOLDER_ID="your_processed_folder_id"
 ```

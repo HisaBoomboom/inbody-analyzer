@@ -136,6 +136,7 @@ celerybeat.pid
 
 # Environments
 .env
+.env.local
 .envrc
 .venv
 env/
@@ -143,6 +144,14 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Credentials and sensitive data
+*.json
+service-account.json
+credentials.json
+
+# Local data files (contain personal health information)
+inbody_data.csv
 
 # Spyder project settings
 .spyderproject
