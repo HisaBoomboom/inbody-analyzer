@@ -1,10 +1,15 @@
 import os
-import glob
+import io
 import base64
 import csv
 from datetime import datetime
 from pydantic import BaseModel, Field
 import google.generativeai as genai
+
+# Google Drive API 関連
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
+from google.auth import default as google_auth_default
 
 # --- Pydantic Schema ---
 class InBodyMeasurement(BaseModel):
@@ -32,40 +37,76 @@ def init_csv():
     """CSVファイルが存在しない場合はヘッダーを書き込んで作成する"""
     if not os.path.exists(CSV_FILE):
         with open(CSV_FILE, mode="w", encoding="utf-8", newline="") as f:
-            # Pydanticモデルからフィールド名を取得
             writer = csv.DictWriter(f, fieldnames=list(InBodyMeasurement.model_fields.keys()))
             writer.writeheader()
 
+def get_drive_service():
+    """Google Drive APIクライアントを取得する"""
+    try:
+        credentials, _ = google_auth_default(scopes=["https://www.googleapis.com/auth/drive"])
+        service = build("drive", "v3", credentials=credentials)
+        return service
+    except Exception as e:
+        print(f"Failed to initialize Google Drive API: {e}")
+        return None
+
 def process_inbody_pdfs():
-    """ローカルの「スキャン_*.pdf」を探してGeminiに送信、抽出結果をCSVに追記し、リネームする"""
+    """Google Driveの指定フォルダから「スキャン_*.pdf」を探してGeminiに送信し、処理後に別フォルダに移動する"""
+
+    # 環境変数の読み込み
     api_key = os.environ.get("GEMINI_API_KEY")
+    input_folder_id = os.environ.get("DRIVE_INPUT_FOLDER_ID")
+    processed_folder_id = os.environ.get("DRIVE_PROCESSED_FOLDER_ID")
+
     if not api_key:
         print("Error: GEMINI_API_KEY environment variable is not set.")
         return
 
-    genai.configure(api_key=api_key)
+    if not input_folder_id or not processed_folder_id:
+        print("Error: DRIVE_INPUT_FOLDER_ID or DRIVE_PROCESSED_FOLDER_ID environment variable is not set.")
+        print("Skipping Drive process. You need to set these variables.")
+        return
 
-    # PDFファイルの検索
-    pdf_files = glob.glob("スキャン_*.pdf")
-    if not pdf_files:
-        print("No matching PDF files found (スキャン_*.pdf).")
+    # APIの初期化
+    genai.configure(api_key=api_key)
+    drive_service = get_drive_service()
+    if not drive_service:
         return
 
     init_csv()
 
-    for file_path in pdf_files:
-        print(f"Processing: {file_path}")
+    # 入力フォルダ内の "スキャン_*.pdf" ファイルを検索
+    query = f"'{input_folder_id}' in parents and name contains 'スキャン_' and mimeType='application/pdf' and trashed=false"
+    try:
+        results = drive_service.files().list(q=query, fields="files(id, name, parents)").execute()
+        files = results.get("files", [])
+    except Exception as e:
+        print(f"Error searching files in Drive: {e}")
+        return
 
-        # Base64でエンコード (gemini-1.5-flashへのMIME渡し用)
+    if not files:
+        print(f"No matching PDF files found in Drive folder: {input_folder_id}")
+        return
+
+    for file_info in files:
+        file_id = file_info["id"]
+        file_name = file_info["name"]
+        print(f"Processing Drive file: {file_name} (ID: {file_id})")
+
+        # ファイルのダウンロード
         try:
-            with open(file_path, "rb") as f:
-                pdf_bytes = f.read()
+            request = drive_service.files().get_media(fileId=file_id)
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while done is False:
+                status, done = downloader.next_chunk()
+            pdf_bytes = fh.getvalue()
         except Exception as e:
-            print(f"Failed to read file {file_path}: {e}")
+            print(f"Failed to download file {file_name}: {e}")
             continue
 
-        # File APIを使ったアップロード（Flash 1.5でPDFを解釈する推奨方法）
-        # ただし単純にインラインで投げる場合は base64化し `mime_type` を指定する
+        # Base64でエンコード
         encoded_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
 
         pdf_part = {
@@ -80,7 +121,6 @@ def process_inbody_pdfs():
         )
 
         try:
-            # gemini-1.5-flashを使用
             model = genai.GenerativeModel("gemini-1.5-flash")
 
             # Structured OutputsとしてPydanticのSchemaを渡す
@@ -93,7 +133,7 @@ def process_inbody_pdfs():
                 )
             )
 
-            # 抽出されたJSON文字列をPydanticモデルで検証・パース
+            # Pydanticモデルで検証・パース
             measurement = InBodyMeasurement.model_validate_json(response.text)
             print(f"Extracted Data: {measurement}")
 
@@ -102,16 +142,24 @@ def process_inbody_pdfs():
                 writer = csv.DictWriter(f, fieldnames=list(InBodyMeasurement.model_fields.keys()))
                 writer.writerow(measurement.model_dump())
 
-            # ファイルのリネーム
-            # measurement.measurement_date を "YYYY/MM/DD HH:mm" -> "YYYYMMDD_HHMM" に変換
+            # ファイルのリネームと移動（Google Drive上）
             date_obj = datetime.strptime(measurement.measurement_date, "%Y/%m/%d %H:%M")
             new_filename = f"InBody_{date_obj.strftime('%Y%m%d_%H%M')}.pdf"
 
-            os.rename(file_path, new_filename)
-            print(f"Renamed {file_path} to {new_filename}")
+            # 元の親フォルダを取得して、それを削除し、新しいフォルダを追加する (Move操作)
+            previous_parents = ",".join(file_info.get("parents", []))
+
+            drive_service.files().update(
+                fileId=file_id,
+                addParents=processed_folder_id,
+                removeParents=previous_parents,
+                body={"name": new_filename},
+                fields="id, parents"
+            ).execute()
+            print(f"Renamed and moved {file_name} to {new_filename} in processed folder.")
 
         except Exception as e:
-            print(f"Error processing {file_path}: {e}")
+            print(f"Error processing {file_name}: {e}")
 
 if __name__ == "__main__":
     process_inbody_pdfs()

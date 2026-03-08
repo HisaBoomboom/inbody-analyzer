@@ -23,34 +23,10 @@ variable "region" {
   description = "The GCP region to deploy resources"
 }
 
-# --- Cloud Storage (Input and Output Buckets) ---
-resource "google_storage_bucket" "input_bucket" {
-  name          = "${var.project_id}-inbody-input"
-  location      = var.region
-  force_destroy = false
-
-  uniform_bucket_level_access = true
-}
-
-resource "google_storage_bucket" "processed_bucket" {
-  name          = "${var.project_id}-inbody-processed"
-  location      = var.region
-  force_destroy = false
-
-  uniform_bucket_level_access = true
-}
-
-# --- Service Account for Cloud Run ---
+# --- Service Account for Cloud Run Job ---
 resource "google_service_account" "inbody_runner" {
-  account_id   = "inbody-cloudrun-sa"
-  display_name = "Service Account for InBody Cloud Run Analyzer"
-}
-
-# Grant Cloud Run SA access to Storage
-resource "google_project_iam_member" "storage_admin" {
-  project = var.project_id
-  role    = "roles/storage.admin"
-  member  = "serviceAccount:${google_service_account.inbody_runner.email}"
+  account_id   = "inbody-cloudrun-job-sa"
+  display_name = "Service Account for InBody Cloud Run Analyzer Job"
 }
 
 # Grant Cloud Run SA access to BigQuery (for future use)
@@ -60,57 +36,69 @@ resource "google_project_iam_member" "bq_data_editor" {
   member  = "serviceAccount:${google_service_account.inbody_runner.email}"
 }
 
-# --- Cloud Run Service (Placeholder) ---
-# Note: You need to build and push a Docker image (e.g., using Artifact Registry)
-# containing main.py wrapped with a Web Server (like FastAPI or Flask) before deploying this.
-resource "google_cloud_run_v2_service" "inbody_analyzer" {
-  name     = "inbody-analyzer-service"
+# Note: The service account also needs access to Google Drive API.
+# You will need to share the Google Drive folders with this Service Account's email address.
+
+# --- Cloud Run Job (Placeholder) ---
+# Note: You need to build and push a Docker image containing main.py before deploying this.
+resource "google_cloud_run_v2_job" "inbody_analyzer_job" {
+  name     = "inbody-analyzer-job"
   location = var.region
 
   template {
-    service_account = google_service_account.inbody_runner.email
-    containers {
-      # Replace with your actual container image URI
-      image = "us-docker.pkg.dev/cloudrun/container/hello"
+    template {
+      service_account = google_service_account.inbody_runner.email
+      containers {
+        # Replace with your actual container image URI
+        image = "us-docker.pkg.dev/cloudrun/container/job"
 
-      # Example of how to pass the Secret Manager secret to Cloud Run
-      # env {
-      #   name = "GEMINI_API_KEY"
-      #   value_source {
-      #     secret_key_ref {
-      #       secret  = google_secret_manager_secret.gemini_key.secret_id
-      #       version = "latest"
-      #     }
-      #   }
-      # }
+        # Example of setting Environment Variables
+        # env {
+        #   name = "GEMINI_API_KEY"
+        #   value_source {
+        #     secret_key_ref {
+        #       secret  = google_secret_manager_secret.gemini_key.secret_id
+        #       version = "latest"
+        #     }
+        #   }
+        # }
+        # env {
+        #   name  = "DRIVE_INPUT_FOLDER_ID"
+        #   value = "your_input_folder_id"
+        # }
+        # env {
+        #   name  = "DRIVE_PROCESSED_FOLDER_ID"
+        #   value = "your_processed_folder_id"
+        # }
+      }
     }
   }
 }
 
-# --- Eventarc Trigger ---
-# Trigger Cloud Run when a new object is uploaded to the input bucket
-resource "google_eventarc_trigger" "bucket_upload_trigger" {
-  name     = "inbody-pdf-upload-trigger"
-  location = var.region
+# --- Cloud Scheduler ---
+# Trigger the Cloud Run Job periodically (e.g., every day at midnight)
+resource "google_cloud_scheduler_job" "inbody_job_trigger" {
+  name             = "trigger-inbody-analyzer-job"
+  description      = "Triggers the InBody Analyzer Cloud Run Job"
+  schedule         = "0 0 * * *"
+  time_zone        = "Asia/Tokyo"
+  region           = var.region
 
-  service_account = google_service_account.inbody_runner.email
+  http_target {
+    http_method = "POST"
+    uri         = "https://${var.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${var.project_id}/jobs/${google_cloud_run_v2_job.inbody_analyzer_job.name}:run"
 
-  matching_criteria {
-    attribute = "type"
-    value     = "google.cloud.storage.object.v1.finalized"
-  }
-
-  matching_criteria {
-    attribute = "bucket"
-    value     = google_storage_bucket.input_bucket.name
-  }
-
-  destination {
-    cloud_run_service {
-      service = google_cloud_run_v2_service.inbody_analyzer.name
-      region  = var.region
+    oauth_token {
+      service_account_email = google_service_account.inbody_runner.email
     }
   }
+}
+
+# Grant the Scheduler service account permission to invoke Cloud Run Jobs
+resource "google_project_iam_member" "scheduler_run_invoker" {
+  project = var.project_id
+  role    = "roles/run.invoker"
+  member  = "serviceAccount:${google_service_account.inbody_runner.email}"
 }
 
 # --- BigQuery Dataset (For future data storage) ---
