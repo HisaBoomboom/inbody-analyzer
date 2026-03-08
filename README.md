@@ -56,7 +56,19 @@ python main.py
 # → ブラウザが開いて認証画面が表示されます
 ```
 
-## 3. テストの実行
+## 3. Web アプリケーションとしての実行
+
+UI（Webブラウザ）から PDF をアップロードして InBody の測定結果を解析することも可能です。FastAPI で構築された Web サーバーを使用します。
+
+```bash
+# Web サーバーの起動
+uv run uvicorn web:app --host 0.0.0.0 --port 8000
+```
+
+起動後、ブラウザで `http://localhost:8000` にアクセスすると、PDF のアップロードフォームが表示されます。
+測定結果が抽出されると画面に表示され、同時に `inbody_data.csv` へと追記（設定があれば Google Sheets へも追記）されます。
+
+## 4. テストの実行
 
 PyTest を使用してテストを実行できます。
 
@@ -96,7 +108,7 @@ pytest --cov --cov-report=html
 テスト用 PDF：
 - `InBody_20260221_1838.pdf` - サンプルの InBody 測定結果（テスト用）
 
-## 4. GCPアーキテクチャ案 (Google Driveベース)
+## 5. GCPアーキテクチャ案 (Google Driveベース)
 
 本格的な運用として、GCPにデプロイする場合のアーキテクチャ案は以下の通りです。
 スマートフォンアプリのGoogle Drive機能を使って紙の結果をスキャン・保存すると、GCP側で定期的に回収・分析します。

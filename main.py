@@ -217,6 +217,62 @@ def append_to_google_sheets(sheets_service, spreadsheet_id, sheet_name, measurem
     except Exception as e:
         print(f"Error appending to Google Sheets: {e}")
 
+def extract_data_from_pdf(client: genai.Client, pdf_bytes: bytes) -> InBodyMeasurement:
+    """PDFのバイトデータを受け取り、Gemini APIを使用してInBodyMeasurementモデルを返す"""
+    prompt = (
+        "You are a helpful assistant. Please extract the requested measurements from the provided InBody scan PDF. "
+        "Ensure the output strictly follows the required JSON schema."
+    )
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "measurement_date": {"type": "string", "description": "The date and time of the measurement in 'YYYY/MM/DD HH:mm' format"},
+            "weight": {"type": "number", "description": "Weight in kg"},
+            "skeletal_muscle_mass": {"type": "number", "description": "Skeletal Muscle Mass in kg"},
+            "body_fat_mass": {"type": "number", "description": "Body Fat Mass in kg"},
+            "body_fat_percentage": {"type": "number", "description": "Percent Body Fat (PBF)"},
+            "bmi": {"type": "number", "description": "Body Mass Index (BMI)"},
+            "visceral_fat_level": {"type": "integer", "description": "Visceral Fat Level"},
+            "basal_metabolic_rate": {"type": "integer", "description": "Basal Metabolic Rate in kcal"},
+            "waist_circumference": {"type": "number", "description": "Waist-Hip Ratio or Waist Circumference. If Waist Circumference is written, output its value."},
+            "total_body_water": {"type": "number", "description": "Total Body Water in L"},
+            "protein": {"type": "number", "description": "Protein in kg"},
+            "mineral": {"type": "number", "description": "Mineral in kg"},
+            "inbody_score": {"type": "integer", "description": "InBody Score"},
+            "target_weight": {"type": "number", "description": "Target Weight in kg"},
+            "fat_control": {"type": "number", "description": "Fat Control in kg"},
+            "muscle_control": {"type": "number", "description": "Muscle Control in kg"}
+        },
+        "required": [
+            "measurement_date", "weight", "skeletal_muscle_mass", "body_fat_mass",
+            "body_fat_percentage", "bmi", "visceral_fat_level", "basal_metabolic_rate",
+            "waist_circumference", "total_body_water", "protein", "mineral",
+            "inbody_score", "target_weight", "fat_control", "muscle_control"
+        ]
+    }
+
+    pdf_part = genai.types.Part.from_bytes(
+        data=pdf_bytes,
+        mime_type="application/pdf"
+    )
+
+    response = client.models.generate_content(
+        model="models/gemini-2.5-flash",
+        contents=[
+            prompt,
+            pdf_part
+        ],
+        config=genai.types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=schema,
+            temperature=0.0,
+        )
+    )
+
+    response_json = json.loads(response.text)
+    return InBodyMeasurement(**response_json)
+
 def process_inbody_pdfs():
     """Google Driveの指定フォルダからPDFを探してGeminiに送信し、処理後にリネームして別フォルダに移動する。
     すでに InBody_ から始まるファイルは処理対象外とする。"""
@@ -310,64 +366,9 @@ def process_inbody_pdfs():
             print(f"Failed to download file {file_name}: {e}")
             continue
 
-        # Gemini API の呼び出し
-        prompt = (
-            "You are a helpful assistant. Please extract the requested measurements from the provided InBody scan PDF. "
-            "Ensure the output strictly follows the required JSON schema."
-        )
-
         try:
-            # google-genai の新しい API を使用（Structured Outputs）
-            schema = {
-                "type": "object",
-                "properties": {
-                    "measurement_date": {"type": "string", "description": "The date and time of the measurement in 'YYYY/MM/DD HH:mm' format"},
-                    "weight": {"type": "number", "description": "Weight in kg"},
-                    "skeletal_muscle_mass": {"type": "number", "description": "Skeletal Muscle Mass in kg"},
-                    "body_fat_mass": {"type": "number", "description": "Body Fat Mass in kg"},
-                    "body_fat_percentage": {"type": "number", "description": "Percent Body Fat (PBF)"},
-                    "bmi": {"type": "number", "description": "Body Mass Index (BMI)"},
-                    "visceral_fat_level": {"type": "integer", "description": "Visceral Fat Level"},
-                    "basal_metabolic_rate": {"type": "integer", "description": "Basal Metabolic Rate in kcal"},
-                    "waist_circumference": {"type": "number", "description": "Waist-Hip Ratio or Waist Circumference. If Waist Circumference is written, output its value."},
-                    "total_body_water": {"type": "number", "description": "Total Body Water in L"},
-                    "protein": {"type": "number", "description": "Protein in kg"},
-                    "mineral": {"type": "number", "description": "Mineral in kg"},
-                    "inbody_score": {"type": "integer", "description": "InBody Score"},
-                    "target_weight": {"type": "number", "description": "Target Weight in kg"},
-                    "fat_control": {"type": "number", "description": "Fat Control in kg"},
-                    "muscle_control": {"type": "number", "description": "Muscle Control in kg"}
-                },
-                "required": [
-                    "measurement_date", "weight", "skeletal_muscle_mass", "body_fat_mass",
-                    "body_fat_percentage", "bmi", "visceral_fat_level", "basal_metabolic_rate",
-                    "waist_circumference", "total_body_water", "protein", "mineral",
-                    "inbody_score", "target_weight", "fat_control", "muscle_control"
-                ]
-            }
-
-            # genai.types.Part.from_bytes() を使用して正しい形式でPDFを渡す
-            pdf_part = genai.types.Part.from_bytes(
-                data=pdf_bytes,
-                mime_type="application/pdf"
-            )
-
-            response = client.models.generate_content(
-                model="models/gemini-2.5-flash",
-                contents=[
-                    prompt,
-                    pdf_part
-                ],
-                config=genai.types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=schema,
-                    temperature=0.0,
-                )
-            )
-
-            # JSON レスポンスをパース
-            response_json = json.loads(response.text)
-            measurement = InBodyMeasurement(**response_json)
+            # Gemini API の呼び出しを共通関数に委譲
+            measurement = extract_data_from_pdf(client, pdf_bytes)
             print(f"Extracted Data: {measurement}")
 
             # CSVへ追記
